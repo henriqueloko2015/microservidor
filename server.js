@@ -1,6 +1,6 @@
 import express from 'express';
 import crypto from 'crypto';
-import fetch from 'node-fetch';
+//import fetch from 'node-fetch';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -123,3 +123,4 @@ app.listen(PORT, () => {
   console.log(`Microservidor rodando em http://localhost:${PORT}`);
   console.log(`DOMINIO permitido: ${DOMINIO}`);
 });
+
