@@ -6,7 +6,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const SECRET_KEY = process.env.SECRET_KEY;
-const DOMINIO = process.env.DOMINIO; // Ex: bb-bet.top
+const DOMINIO = process.env.DOMINIO; // ex: bb-bet.top
 
 // -------------------------
 // Funções auxiliares
@@ -28,21 +28,17 @@ function decryptToken(tokenBase64) {
     const data = raw.slice(48);
 
     const key = crypto.createHash('sha256').update(SECRET_KEY).digest();
-
-    // Verifica HMAC
     const expectedHmac = crypto.createHmac('sha256', SECRET_KEY)
       .update(join(iv, data))
       .digest();
 
     if (!timingSafeEqual(hmac, expectedHmac)) return null;
 
-    // Decripta AES-256-CBC
     const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
     let decrypted = decipher.update(data);
     decrypted = Buffer.concat([decrypted, decipher.final()]);
 
     return JSON.parse(decrypted.toString('utf8'));
-
   } catch (err) {
     console.error("Erro ao decifrar token:", err.message);
     return null;
@@ -50,30 +46,41 @@ function decryptToken(tokenBase64) {
 }
 
 // -------------------------
+// NOVA PROTEÇÃO ANTI-LEECH
+// -------------------------
+function checkReferer(req) {
+  const referer = req.headers.referer || '';
+
+  // Sem referer (apps, players externos)
+  if (!referer) return true;
+
+  try {
+    const url = new URL(referer);
+
+    // permite qualquer subdomínio do seu domínio
+    if (url.hostname.endsWith(DOMINIO)) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// -------------------------
 // Rota principal
 // -------------------------
 app.get('/', async (req, res) => {
-
   const token = req.query.token;
   if (!token) return res.status(400).send("Token faltando");
 
-  const referer = req.headers.referer || '';
-
-  // Logs para debug
-  console.log("Referer recebido:", referer);
-  console.log("Domínio permitido:", DOMINIO);
-
-  // -------------------------
-  // 🌟 ANTI-LEECH CORRIGIDO
-  // Libera TODOS os subdomínios (apicdn, cdn, tv, painel...)
-  // -------------------------
-  if (!referer.includes("." + DOMINIO)) {
-    return res.status(403).send("Acesso negado (Anti-leech)");
+  if (!checkReferer(req)) {
+    return res.status(403).send("Acesso bloqueado (Referer inválido)");
   }
 
   const payload = decryptToken(token);
-  if (!payload) return res.status(403).send("Token inválido ou corrupto");
+  if (!payload) return res.status(403).send("Token inválido");
 
+  // Expiração
   if (Date.now() / 1000 > payload.exp) {
     return res.status(410).send("Token expirado");
   }
@@ -82,23 +89,18 @@ app.get('/', async (req, res) => {
 
   try {
     const headers = {};
+
     if (req.headers.range) headers['Range'] = req.headers.range;
 
-    // Força referer válido para provedores que exigem
     headers['Referer'] = `https://${DOMINIO}/`;
+    headers['User-Agent'] = req.headers['user-agent'] || 'Mozilla/5.0';
 
-    headers['User-Agent'] =
-      req.headers['user-agent'] ||
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64)';
-
-    const upstream = await fetch(videoUrl, { headers });
+    const upstream = await fetch(videoUrl, { headers, method: 'GET' });
 
     const resHeaders = {};
     upstream.headers.forEach((v, k) => {
-      if (!['connection', 'transfer-encoding', 'content-encoding']
-        .includes(k.toLowerCase())) {
+      if (!['connection', 'transfer-encoding', 'content-encoding'].includes(k.toLowerCase()))
         resHeaders[k] = v;
-      }
     });
 
     resHeaders['Accept-Ranges'] = 'bytes';
@@ -117,5 +119,5 @@ app.get('/', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Microservidor rodando em http://localhost:${PORT}`);
-  console.log(`DOMINIO permitidos: *.${DOMINIO}`);
+  console.log(`DOMINIO: ${DOMINIO}`);
 });
