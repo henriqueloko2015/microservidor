@@ -83,8 +83,8 @@ app.get('/', async (req, res) => {
     // -------------------------------
     const referer = req.headers.referer || "";
     // O referer pode incluir o protocolo (http:// ou https://), então verificamos se o domínio está contido.
-    if (!referer.includes(DOMINIO)) {
-        return res.status(403).send("Acesso negado (Anti-leech)");
+    //if (!referer.includes(DOMINIO)) {
+        //return res.status(403).send("Acesso negado (Anti-leech)");
     }
 
     // -------------------------------
@@ -162,6 +162,7 @@ app.listen(port, () => {
     console.log(`SECRET_KEY: ${SECRET_KEY}`);
     console.log(`DOMINIO (Anti-leech): ${DOMINIO}`);
 });
+
 
 
 
