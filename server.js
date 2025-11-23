@@ -7,7 +7,7 @@ const port = 3000;
 // Variáveis de Ambiente (Mantenha as mesmas do seu Worker)
 // **IMPORTANTE**: Substitua pelos seus valores reais ou use variáveis de ambiente do seu host.
 const SECRET_KEY = process.env.SECRET_KEY || "ChaveNovaSeguraAki2025!";
-const DOMINIO = process.env.DOMINIO || "bb-bet.top"; // Domínio do seu player (para anti-leech)
+const DOMINIO = process.env.DOMINIO || "apicdn.bb-bet.top"; // Domínio do seu player (para anti-leech)
 
 // ========================================================
 // Funções Auxiliares de Criptografia (Compatíveis com PHP)
@@ -162,5 +162,6 @@ app.listen(port, () => {
     console.log(`SECRET_KEY: ${SECRET_KEY}`);
     console.log(`DOMINIO (Anti-leech): ${DOMINIO}`);
 });
+
 
 
