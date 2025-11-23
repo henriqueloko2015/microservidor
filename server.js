@@ -1,11 +1,12 @@
 import express from 'express';
 import crypto from 'crypto';
+import fetch from 'node-fetch';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const SECRET_KEY = process.env.SECRET_KEY;
-const DOMINIO = process.env.DOMINIO; // ex: apicdn.bb-bet.top
+const DOMINIO = process.env.DOMINIO; // Ex: bb-bet.top
 
 // -------------------------
 // Funções auxiliares
@@ -29,8 +30,7 @@ function decryptToken(tokenBase64) {
     const key = crypto.createHash('sha256').update(SECRET_KEY).digest();
 
     // Verifica HMAC
-    const expectedHmac = crypto
-      .createHmac('sha256', SECRET_KEY)
+    const expectedHmac = crypto.createHmac('sha256', SECRET_KEY)
       .update(join(iv, data))
       .digest();
 
@@ -42,6 +42,7 @@ function decryptToken(tokenBase64) {
     decrypted = Buffer.concat([decrypted, decipher.final()]);
 
     return JSON.parse(decrypted.toString('utf8'));
+
   } catch (err) {
     console.error("Erro ao decifrar token:", err.message);
     return null;
@@ -52,19 +53,27 @@ function decryptToken(tokenBase64) {
 // Rota principal
 // -------------------------
 app.get('/', async (req, res) => {
+
   const token = req.query.token;
   if (!token) return res.status(400).send("Token faltando");
 
-  // Anti-leech
   const referer = req.headers.referer || '';
-  if (!referer.includes(DOMINIO)) {
-    return res.status(403).send("Acesso negado");
+
+  // Logs para debug
+  console.log("Referer recebido:", referer);
+  console.log("Domínio permitido:", DOMINIO);
+
+  // -------------------------
+  // 🌟 ANTI-LEECH CORRIGIDO
+  // Libera TODOS os subdomínios (apicdn, cdn, tv, painel...)
+  // -------------------------
+  if (!referer.includes("." + DOMINIO)) {
+    return res.status(403).send("Acesso negado (Anti-leech)");
   }
 
   const payload = decryptToken(token);
   if (!payload) return res.status(403).send("Token inválido ou corrupto");
 
-  // Expiração
   if (Date.now() / 1000 > payload.exp) {
     return res.status(410).send("Token expirado");
   }
@@ -72,22 +81,22 @@ app.get('/', async (req, res) => {
   const videoUrl = payload.url;
 
   try {
-    // Headers que o servidor upstream espera
     const headers = {};
     if (req.headers.range) headers['Range'] = req.headers.range;
+
+    // Força referer válido para provedores que exigem
     headers['Referer'] = `https://${DOMINIO}/`;
-    headers['User-Agent'] = req.headers['user-agent'] || 'Mozilla/5.0';
 
-    // fetch nativo do Node 22 (SEM node-fetch)
-    const upstream = await fetch(videoUrl, {
-      headers,
-      method: 'GET'
-    });
+    headers['User-Agent'] =
+      req.headers['user-agent'] ||
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64)';
 
-    // Copiar headers
+    const upstream = await fetch(videoUrl, { headers });
+
     const resHeaders = {};
     upstream.headers.forEach((v, k) => {
-      if (!['connection', 'transfer-encoding', 'content-encoding'].includes(k.toLowerCase())) {
+      if (!['connection', 'transfer-encoding', 'content-encoding']
+        .includes(k.toLowerCase())) {
         resHeaders[k] = v;
       }
     });
@@ -97,24 +106,8 @@ app.get('/', async (req, res) => {
     resHeaders['Cache-Control'] = 'no-store';
     resHeaders['X-Accel-Buffering'] = 'no';
 
-    res.writeHead(upstream.status, resHeaders);
-
-    // Pipe do streaming
-    const reader = upstream.body.getReader();
-    const writer = res;
-
-    function pump() {
-      return reader.read().then(({ done, value }) => {
-        if (done) {
-          writer.end();
-          return;
-        }
-        writer.write(Buffer.from(value));
-        return pump();
-      });
-    }
-
-    pump();
+    res.status(upstream.status);
+    upstream.body.pipe(res);
 
   } catch (err) {
     console.error("Erro no proxy:", err.message);
@@ -124,5 +117,5 @@ app.get('/', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Microservidor rodando em http://localhost:${PORT}`);
-  console.log(`DOMINIO: ${DOMINIO}`);
+  console.log(`DOMINIO permitidos: *.${DOMINIO}`);
 });
