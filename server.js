@@ -1,6 +1,5 @@
 import express from 'express';
 import crypto from 'crypto';
-import fetch from 'node-fetch';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,7 +29,11 @@ function decryptToken(tokenBase64) {
     const key = crypto.createHash('sha256').update(SECRET_KEY).digest();
 
     // Verifica HMAC
-    const expectedHmac = crypto.createHmac('sha256', SECRET_KEY).update(join(iv, data)).digest();
+    const expectedHmac = crypto
+      .createHmac('sha256', SECRET_KEY)
+      .update(join(iv, data))
+      .digest();
+
     if (!timingSafeEqual(hmac, expectedHmac)) return null;
 
     // Decripta AES-256-CBC
@@ -54,24 +57,34 @@ app.get('/', async (req, res) => {
 
   // Anti-leech
   const referer = req.headers.referer || '';
-  if (!referer.includes(DOMINIO)) return res.status(403).send("Acesso negado");
+  if (!referer.includes(DOMINIO)) {
+    return res.status(403).send("Acesso negado");
+  }
 
   const payload = decryptToken(token);
   if (!payload) return res.status(403).send("Token inválido ou corrupto");
 
   // Expiração
-  if (Date.now() / 1000 > payload.exp) return res.status(410).send("Token expirado");
+  if (Date.now() / 1000 > payload.exp) {
+    return res.status(410).send("Token expirado");
+  }
 
   const videoUrl = payload.url;
 
   try {
+    // Headers que o servidor upstream espera
     const headers = {};
     if (req.headers.range) headers['Range'] = req.headers.range;
     headers['Referer'] = `https://${DOMINIO}/`;
     headers['User-Agent'] = req.headers['user-agent'] || 'Mozilla/5.0';
 
-    const upstream = await fetch(videoUrl, { headers, method: 'GET' });
+    // fetch nativo do Node 22 (SEM node-fetch)
+    const upstream = await fetch(videoUrl, {
+      headers,
+      method: 'GET'
+    });
 
+    // Copiar headers
     const resHeaders = {};
     upstream.headers.forEach((v, k) => {
       if (!['connection', 'transfer-encoding', 'content-encoding'].includes(k.toLowerCase())) {
@@ -84,8 +97,25 @@ app.get('/', async (req, res) => {
     resHeaders['Cache-Control'] = 'no-store';
     resHeaders['X-Accel-Buffering'] = 'no';
 
-    res.status(upstream.status);
-    upstream.body.pipe(res);
+    res.writeHead(upstream.status, resHeaders);
+
+    // Pipe do streaming
+    const reader = upstream.body.getReader();
+    const writer = res;
+
+    function pump() {
+      return reader.read().then(({ done, value }) => {
+        if (done) {
+          writer.end();
+          return;
+        }
+        writer.write(Buffer.from(value));
+        return pump();
+      });
+    }
+
+    pump();
+
   } catch (err) {
     console.error("Erro no proxy:", err.message);
     res.status(500).send(`Erro no proxy: ${err.message}`);
