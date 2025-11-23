@@ -6,7 +6,7 @@ const port = process.env.PORT || 3000;
 
 // Variáveis de Ambiente
 const SECRET_KEY = process.env.SECRET_KEY || "ChaveNovaSeguraAki2025!";
-const DOMINIOS = (process.env.DOMINIOS || "cdn.bb-bet.top").split(","); // Pode adicionar múltiplos domínios separados por vírgula
+const DOMINIOS = (process.env.DOMINIOS || "apicdn.bb-bet.top").split(","); // Pode adicionar múltiplos domínios separados por vírgula
 
 // ================================
 // Funções Auxiliares de Criptografia
