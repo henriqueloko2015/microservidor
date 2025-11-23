@@ -158,9 +158,10 @@ app.get('/', async (req, res) => {
 });
 
 app.listen(port, () => {
-    console.log(`Microservidor de streaming rodando em https://microservidor.onrender.com:${port}`);
+    console.log(`Microservidor de streaming rodando em http://localhost:${port}`);
     console.log(`SECRET_KEY: ${SECRET_KEY}`);
     console.log(`DOMINIO (Anti-leech): ${DOMINIO}`);
 });
+
 
 
