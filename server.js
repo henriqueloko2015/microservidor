@@ -2,127 +2,163 @@ const express = require('express');
 const crypto = require('crypto');
 const axios = require('axios');
 const app = express();
+const port = 3000;
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+// Variáveis de Ambiente (Mantenha as mesmas do seu Worker)
+// **IMPORTANTE**: Substitua pelos seus valores reais ou use variáveis de ambiente do seu host.
+const SECRET_KEY = process.env.SECRET_KEY || "ChaveNovaSeguraAki2025!";
+const DOMINIO = process.env.DOMINIO || "apicdn.bb-bet.top"; // Domínio do seu player (para anti-leech)
 
-const SECRET_KEY = process.env.SECRET_KEY;
-const DOMINIO = process.env.DOMINIO; // ex: bb-bet.top
+// ========================================================
+// Funções Auxiliares de Criptografia (Compatíveis com PHP)
+// ========================================================
 
-function join(a, b) { return Buffer.concat([a, b]); }
-
+/**
+ * Verifica se dois buffers são iguais de forma segura contra ataques de tempo.
+ * @param {Buffer} a
+ * @param {Buffer} b
+ * @returns {boolean}
+ */
 function timingSafeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+    if (a.length !== b.length) {
+        return false;
+    }
+    return crypto.timingSafeEqual(a, b);
 }
 
+/**
+ * Decifra o token encriptado pelo PHP (AES-256-CBC + HMAC SHA-256).
+ * @param {string} tokenBase64 - O token completo em Base64.
+ * @returns {object|null} O payload decifrado ou null em caso de falha.
+ */
 function decryptToken(tokenBase64) {
-  try {
-    const raw = Buffer.from(tokenBase64, 'base64');
-    const hmac = raw.slice(0, 32);
-    const iv = raw.slice(32, 48);
-    const data = raw.slice(48);
-    const key = crypto.createHash('sha256').update(SECRET_KEY).digest();
-    const expectedHmac = crypto.createHmac('sha256', SECRET_KEY)
-      .update(join(iv, data))
-      .digest();
-    if (!timingSafeEqual(hmac, expectedHmac)) return null;
+    try {
+        // 1. Decodifica Base64
+        const raw = Buffer.from(tokenBase64, 'base64');
 
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-    let decrypted = decipher.update(data);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
+        // 2. Separa as partes
+        const hmac = raw.slice(0, 32); // 32 bytes
+        const iv = raw.slice(32, 48); // 16 bytes
+        const cipherText = raw.slice(48); // Restante é o texto cifrado
 
-    return JSON.parse(decrypted.toString('utf8'));
-  } catch (err) {
-    console.error("Erro ao decifrar token:", err.message);
-    return null;
-  }
+        // 3. Gera a chave AES e a chave HMAC (SHA-256 da SECRET_KEY)
+        const key = crypto.createHash('sha256').update(SECRET_KEY).digest();
+        
+        // 4. Verifica HMAC
+        const hmacData = Buffer.concat([iv, cipherText]);
+        const expectedHmac = crypto.createHmac('sha256', SECRET_KEY).update(hmacData).digest();
+
+        if (!timingSafeEqual(hmac, expectedHmac)) {
+            console.error("HMAC inválido.");
+            return null;
+        }
+
+        // 5. Decifra AES-256-CBC
+        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+        let decrypted = decipher.update(cipherText);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+        // 6. Retorna o payload JSON
+        const payload = JSON.parse(decrypted.toString('utf8'));
+        return payload;
+
+    } catch (err) {
+        console.error("Erro ao decifrar token:", err.message);
+        return null;
+    }
 }
 
-// ------------------------------------
-// NOVA FUNÇÃO ANTI-LEECH COM LOGS
-// ------------------------------------
-function checkReferer(req) {
-  const referer = req.headers.referer || '';
+// ========================================================
+// Rota Principal do Microservidor
+// ========================================================
 
-  console.log("=== REFERER DEBUG ===");
-  console.log("Referer recebido:", referer);
-  console.log("DOMINIO permitido:", DOMINIO);
-
-  if (!referer) {
-    console.log("Sem referer → permitido");
-    return true;
-  }
-
-  try {
-    const url = new URL(referer);
-    console.log("Host extraído:", url.hostname);
-
-    if (url.hostname === DOMINIO || url.hostname.endsWith("." + DOMINIO)) {
-      console.log("Referer permitido ✔");
-      return true;
+app.get('/', async (req, res) => {
+    const token = req.query.token;
+    if (!token) {
+        return res.status(400).send("Token faltando");
     }
 
-    console.log("Referer bloqueado ✖");
-    return false;
+    // -------------------------------
+    // ANTI-LEECH
+    // -------------------------------
+    const referer = req.headers.referer || "";
+    // O referer pode incluir o protocolo (http:// ou https://), então verificamos se o domínio está contido.
+    if (!referer.includes(DOMINIO)) {
+        return res.status(403).send("Acesso negado (Anti-leech)");
+    }
 
-  } catch (err) {
-    console.log("Erro ao analisar referer:", err.message);
-    return false;
-  }
-}
+    // -------------------------------
+    // DECRIPTAÇÃO E VALIDAÇÃO
+    // -------------------------------
+    const payload = decryptToken(token);
 
-// ------------------------------------
-// ROTA PRINCIPAL
-// ------------------------------------
-app.get('/', async (req, res) => {
-  const token = req.query.token;
-  if (!token) return res.status(400).send("Token faltando");
+    if (!payload) {
+        return res.status(403).send("Token inválido ou corrupto");
+    }
 
-  if (!checkReferer(req)) {
-    return res.status(403).send("Acesso bloqueado (Referer inválido)");
-  }
+    // -------------------------------
+    // VERIFICA EXPIRAÇÃO
+    // -------------------------------
+    if (Date.now() / 1000 > payload.exp) {
+        return res.status(410).send("Token expirado");
+    }
 
-  const payload = decryptToken(token);
-  if (!payload) return res.status(403).send("Token inválido");
+    const videoUrl = payload.url;
 
-  if (Date.now() / 1000 > payload.exp) {
-    return res.status(410).send("Token expirado");
-  }
+    // -------------------------------
+    // PROXY STREAMING COM RANGE REQUESTS
+    // -------------------------------
+    try {
+        const rangeHeader = req.headers.range;
+        
+        // Configura os headers para a requisição upstream
+        const fetchHeaders = {
+            // Passa o Range header para o servidor de origem
+            ...(rangeHeader && { 'Range': rangeHeader }),
+            // Você pode querer passar outros headers, como User-Agent, se necessário
+        };
 
-  const videoUrl = payload.url;
+        const upstreamResponse = await axios({
+            method: 'get',
+            url: videoUrl,
+            headers: fetchHeaders,
+            responseType: 'stream', // Importante para streaming
+        });
 
-  try {
-    const headers = {};
-    if (req.headers.range) headers['Range'] = req.headers.range;
+        // -------------------------------
+        // CONFIGURA HEADERS DE RESPOSTA
+        // -------------------------------
+        
+        // Copia os headers do upstream para a resposta do microservidor
+        Object.keys(upstreamResponse.headers).forEach(key => {
+            // Evita headers que podem causar problemas ou que serão definidos abaixo
+            if (!['connection', 'transfer-encoding', 'content-encoding'].includes(key.toLowerCase())) {
+                res.setHeader(key, upstreamResponse.headers[key]);
+            }
+        });
 
-    headers['Referer'] = `https://${DOMINIO}/`;
-    headers['User-Agent'] = req.headers['user-agent'] || 'Mozilla/5.0';
+        // Headers de segurança e compatibilidade
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("X-Accel-Buffering", "no"); // Para Nginx/Proxy
 
-    const upstream = await fetch(videoUrl, { headers });
+        // Define o status code (200, 206, etc.)
+        res.status(upstreamResponse.status);
 
-    const resHeaders = {};
-    upstream.headers.forEach((v, k) => {
-      if (!['connection', 'transfer-encoding', 'content-encoding'].includes(k.toLowerCase()))
-        resHeaders[k] = v;
-    });
+        // Faz o pipe do stream do upstream para a resposta do cliente
+        upstreamResponse.data.pipe(res);
 
-    resHeaders['Accept-Ranges'] = 'bytes';
-    resHeaders['Access-Control-Allow-Origin'] = '*';
-    resHeaders['Cache-Control'] = 'no-store';
-
-    res.status(upstream.status);
-    upstream.body.pipe(res);
-
-  } catch (err) {
-    console.error("Erro no proxy:", err.message);
-    res.status(500).send("Erro no proxy: " + err.message);
-  }
+    } catch (error) {
+        console.error("Erro no proxy de streaming:", error.message);
+        // Tenta repassar o status code do erro upstream, se disponível
+        const status = error.response ? error.response.status : 500;
+        res.status(status).send(`Erro no proxy: ${error.message}`);
+    }
 });
 
-app.listen(PORT, () => {
-  console.log(`Microservidor rodando em http://localhost:${PORT}`);
-  console.log(`DOMINIO permitido: ${DOMINIO}`);
+app.listen(port, () => {
+    console.log(`Microservidor de streaming rodando em http://localhost:${port}`);
+    console.log(`SECRET_KEY: ${SECRET_KEY}`);
+    console.log(`DOMINIO (Anti-leech): ${DOMINIO}`);
 });
-
-
