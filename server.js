@@ -8,12 +8,7 @@ const PORT = process.env.PORT || 3000;
 const SECRET_KEY = process.env.SECRET_KEY;
 const DOMINIO = process.env.DOMINIO; // ex: bb-bet.top
 
-// -------------------------
-// Funções auxiliares
-// -------------------------
-function join(a, b) {
-  return Buffer.concat([a, b]);
-}
+function join(a, b) { return Buffer.concat([a, b]); }
 
 function timingSafeEqual(a, b) {
   if (a.length !== b.length) return false;
@@ -26,12 +21,10 @@ function decryptToken(tokenBase64) {
     const hmac = raw.slice(0, 32);
     const iv = raw.slice(32, 48);
     const data = raw.slice(48);
-
     const key = crypto.createHash('sha256').update(SECRET_KEY).digest();
     const expectedHmac = crypto.createHmac('sha256', SECRET_KEY)
       .update(join(iv, data))
       .digest();
-
     if (!timingSafeEqual(hmac, expectedHmac)) return null;
 
     const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
@@ -45,30 +38,42 @@ function decryptToken(tokenBase64) {
   }
 }
 
-// -------------------------
-// NOVA PROTEÇÃO ANTI-LEECH
-// -------------------------
+// ------------------------------------
+// NOVA FUNÇÃO ANTI-LEECH COM LOGS
+// ------------------------------------
 function checkReferer(req) {
   const referer = req.headers.referer || '';
 
-  // Sem referer (apps, players externos)
-  if (!referer) return true;
+  console.log("=== REFERER DEBUG ===");
+  console.log("Referer recebido:", referer);
+  console.log("DOMINIO permitido:", DOMINIO);
+
+  if (!referer) {
+    console.log("Sem referer → permitido");
+    return true;
+  }
 
   try {
     const url = new URL(referer);
+    console.log("Host extraído:", url.hostname);
 
-    // permite qualquer subdomínio do seu domínio
-    if (url.hostname.endsWith(DOMINIO)) return true;
+    if (url.hostname === DOMINIO || url.hostname.endsWith("." + DOMINIO)) {
+      console.log("Referer permitido ✔");
+      return true;
+    }
 
+    console.log("Referer bloqueado ✖");
     return false;
-  } catch {
+
+  } catch (err) {
+    console.log("Erro ao analisar referer:", err.message);
     return false;
   }
 }
 
-// -------------------------
-// Rota principal
-// -------------------------
+// ------------------------------------
+// ROTA PRINCIPAL
+// ------------------------------------
 app.get('/', async (req, res) => {
   const token = req.query.token;
   if (!token) return res.status(400).send("Token faltando");
@@ -80,7 +85,6 @@ app.get('/', async (req, res) => {
   const payload = decryptToken(token);
   if (!payload) return res.status(403).send("Token inválido");
 
-  // Expiração
   if (Date.now() / 1000 > payload.exp) {
     return res.status(410).send("Token expirado");
   }
@@ -89,13 +93,12 @@ app.get('/', async (req, res) => {
 
   try {
     const headers = {};
-
     if (req.headers.range) headers['Range'] = req.headers.range;
 
     headers['Referer'] = `https://${DOMINIO}/`;
     headers['User-Agent'] = req.headers['user-agent'] || 'Mozilla/5.0';
 
-    const upstream = await fetch(videoUrl, { headers, method: 'GET' });
+    const upstream = await fetch(videoUrl, { headers });
 
     const resHeaders = {};
     upstream.headers.forEach((v, k) => {
@@ -106,18 +109,17 @@ app.get('/', async (req, res) => {
     resHeaders['Accept-Ranges'] = 'bytes';
     resHeaders['Access-Control-Allow-Origin'] = '*';
     resHeaders['Cache-Control'] = 'no-store';
-    resHeaders['X-Accel-Buffering'] = 'no';
 
     res.status(upstream.status);
     upstream.body.pipe(res);
 
   } catch (err) {
     console.error("Erro no proxy:", err.message);
-    res.status(500).send(`Erro no proxy: ${err.message}`);
+    res.status(500).send("Erro no proxy: " + err.message);
   }
 });
 
 app.listen(PORT, () => {
   console.log(`Microservidor rodando em http://localhost:${PORT}`);
-  console.log(`DOMINIO: ${DOMINIO}`);
+  console.log(`DOMINIO permitido: ${DOMINIO}`);
 });
